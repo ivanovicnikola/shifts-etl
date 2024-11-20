@@ -4,6 +4,7 @@ from typing import List, Dict, Optional
 import psycopg2
 from psycopg2.extras import execute_values
 from urllib.parse import urljoin
+import logging
 
 DB_HOST = 'localhost'
 DB_PORT = '5433'
@@ -11,6 +12,12 @@ DB_NAME = 'postgres'
 DB_USER = 'postgres'
 DB_PASSWORD = 'postgres'
 
+# Configure logging to output to the console
+logging.basicConfig(
+    level=logging.DEBUG,  # Set the level to DEBUG to capture all log messages
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # Define log format
+    handlers=[logging.StreamHandler()]  # This will output logs to the console
+)
 
 class ShiftDataProcessor:
     def __init__(self, db_config: Dict[str, str], api_url: str):
@@ -28,10 +35,10 @@ class ShiftDataProcessor:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            print(f"An error occurred: {e}")
+            logging.error(f"An error occurred: {e}")
             return None
         except ValueError as e:
-            print(f"Error parsing JSON: {e}")
+            logging.error(f"Error parsing JSON: {e}")
             return None
 
     @staticmethod
@@ -128,44 +135,59 @@ class ShiftDataProcessor:
             execute_values(cursor, insert_query, data_tuples)
 
             conn.commit()
-            print(f"Successfully inserted {len(data)} records into {table_name}")
+            logging.info(f"Successfully inserted {len(data)} records into {table_name}")
 
         except Exception as e:
-            print(f"Error inserting data into {table_name}: {e}")
+            logging.error(f"Error inserting data into {table_name}: {e}")
         finally:
             cursor.close()
             conn.close()
+    
+    def get_next_url(self, json_data):
+        """Extracts the next page URL from the response data."""
+        next_url = json_data['links'].get('next', None)
+        base_url = json_data['links'].get('base', None)
+        if next_url and base_url:
+            return urljoin(base_url, next_url)
+        return None
 
-    def process_all_pages(self) -> None:
+    def process_and_insert_data(self, json_data):
+        """Process the current page and insert data into the database."""
+        # Process data for this page
+        self.process_json(json_data)
+
+        # Insert data for each table
+        self.insert_data('shifts', ['shift_id', 'shift_date', 'shift_start', 'shift_finish', 'shift_cost'], self.shifts)
+        self.insert_data('breaks', ['break_id', 'shift_id', 'break_start', 'break_finish', 'is_paid'], self.breaks)
+        self.insert_data('allowances', ['allowance_id', 'shift_id', 'allowance_value', 'allowance_cost'], self.allowances)
+        self.insert_data('award_interpretations', ['award_id', 'shift_id', 'award_date', 'award_units', 'award_cost'], self.award_interpretations)
+
+    def process_all_pages(self):
         """Fetches, processes, and inserts data for all pages."""
         url = self.api_url
         while url:
-            # Fetch the data for the current page
-            json_data = self.fetch_data(url)
-            if json_data:
-                # Process the current page of data
-                self.process_json(json_data)
+            try:
+                # Fetch the data for the current page
+                json_data = self.fetch_data(url)
+                if json_data:
+                    self.process_and_insert_data(json_data)
 
-                # Insert data for each table
-                self.insert_data('shifts', ['shift_id', 'shift_date', 'shift_start', 'shift_finish', 'shift_cost'], self.shifts)
-                self.insert_data('breaks', ['break_id', 'shift_id', 'break_start', 'break_finish', 'is_paid'], self.breaks)
-                self.insert_data('allowances', ['allowance_id', 'shift_id', 'allowance_value', 'allowance_cost'], self.allowances)
-                self.insert_data('award_interpretations', ['award_id', 'shift_id', 'award_date', 'award_units', 'award_cost'], self.award_interpretations)
-
-                # Check if there's a next page URL, and update `url` accordingly
-                next_url = json_data['links'].get('next', None)
-                if next_url:
-                    base_url = json_data['links'].get('base', None)
-                    url = urljoin(base_url, next_url)
-                    print(f"Fetching next page: {url}")
+                    # Get the next page URL and update `url`
+                    url = self.get_next_url(json_data)
+                    if url:
+                        logging.info(f"Fetching next page: {url}")
+                    else:
+                        logging.info("No more pages to fetch.")
+                        break  # Exit loop if no 'next' URL is found
                 else:
-                    print("No more pages to fetch.")
-                    break  # Break the loop when no 'next' URL is found
-            else:
-                print("Failed to fetch data, stopping.")
-                break  # Break the loop if there's an error fetching data
-        
-        # After inserting all data compute kpis
+                    logging.error("Failed to fetch data, stopping.")
+                    break  # Stop if data fetch failed
+
+            except Exception as e:
+                logging.error(f"Error processing data: {e}")
+                break  # Stop the loop on error
+
+        # After all pages are processed, compute KPIs
         self.compute_kpis()
 
     def compute_kpis(self) -> None:
@@ -232,10 +254,10 @@ class ShiftDataProcessor:
 
             conn.commit()
 
-            print("Successfully inserted KPI values into the kpis table")
+            logging.info("Successfully inserted KPI values into the kpis table")
 
         except Exception as e:
-            print(f"Error computing and inserting KPIs: {e}")
+            logging.error(f"Error computing and inserting KPIs: {e}")
         finally:
             if cursor:
                 cursor.close()
