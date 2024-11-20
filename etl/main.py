@@ -3,6 +3,7 @@ import requests
 from typing import List, Dict, Optional
 import psycopg2
 from psycopg2.extras import execute_values
+from urllib.parse import urljoin
 
 DB_HOST = 'localhost'
 DB_PORT = '5433'
@@ -20,9 +21,10 @@ class ShiftDataProcessor:
         self.allowances = []
         self.award_interpretations = []
 
-    def fetch_data(self) -> Optional[Dict]:
+    def fetch_data(self, url: str) -> Optional[Dict]:
+        """Fetches data from the API."""
         try:
-            response = requests.get(self.api_url)
+            response = requests.get(url)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -34,6 +36,7 @@ class ShiftDataProcessor:
 
     @staticmethod
     def map_dict_keys(data: List[Dict], column_mapping: Dict[str, str]) -> List[Dict]:
+        """Maps the dictionary keys to new names based on the provided mapping."""
         return [
             {column_mapping.get(key, key): value for key, value in record.items()}
             for record in data
@@ -41,6 +44,7 @@ class ShiftDataProcessor:
 
     @staticmethod
     def process_nested_records(results: List[Dict], record_key: str, parent_key: str) -> List[Dict]:
+        """Processes nested records to flatten the structure."""
         return [
             {**record, parent_key: result['id']}
             for result in results
@@ -48,8 +52,9 @@ class ShiftDataProcessor:
         ]
 
     def process_json(self, json_data: Dict) -> None:
+        """Processes the JSON response and extracts relevant data."""
         results = json_data['results']
-        
+
         # Process shifts
         self.shifts = [
             {
@@ -104,6 +109,7 @@ class ShiftDataProcessor:
         )
 
     def insert_data(self, table_name: str, columns: List[str], data: List[Dict]) -> None:
+        """Inserts data into the database."""
         column_names = ', '.join(columns)
         insert_query = f"INSERT INTO {table_name} ({column_names}) VALUES %s"
 
@@ -126,6 +132,35 @@ class ShiftDataProcessor:
             cursor.close()
             conn.close()
 
+    def process_all_pages(self) -> None:
+        """Fetches, processes, and inserts data for all pages."""
+        url = self.api_url
+        while url:
+            # Fetch the data for the current page
+            json_data = self.fetch_data(url)
+            if json_data:
+                # Process the current page of data
+                self.process_json(json_data)
+
+                # Insert data for each table
+                self.insert_data('shifts', ['shift_id', 'shift_date', 'shift_start', 'shift_finish', 'shift_cost'], self.shifts)
+                self.insert_data('breaks', ['break_id', 'shift_id', 'break_start', 'break_finish', 'is_paid'], self.breaks)
+                self.insert_data('allowances', ['allowance_id', 'shift_id', 'allowance_value', 'allowance_cost'], self.allowances)
+                self.insert_data('award_interpretations', ['award_id', 'shift_id', 'award_date', 'award_units', 'award_cost'], self.award_interpretations)
+
+                # Check if there's a next page URL, and update `url` accordingly
+                next_url = json_data['links'].get('next', None)
+                if next_url:
+                    base_url = json_data['links'].get('base', None)
+                    url = urljoin(base_url, next_url)
+                    print(f"Fetching next page: {url}")
+                else:
+                    print("No more pages to fetch.")
+                    break  # Break the loop when no 'next' URL is found
+            else:
+                print("Failed to fetch data, stopping.")
+                break  # Break the loop if there's an error fetching data
+
 
 if __name__ == "__main__":
     db_config = {
@@ -137,11 +172,4 @@ if __name__ == "__main__":
     }
     api_url = 'http://localhost:8000/api/shifts'
     processor = ShiftDataProcessor(db_config, api_url)
-
-    json_data = processor.fetch_data()
-    if json_data:
-        processor.process_json(json_data)
-        processor.insert_data('shifts', ['shift_id', 'shift_date', 'shift_start', 'shift_finish', 'shift_cost'], processor.shifts)
-        processor.insert_data('breaks', ['break_id', 'shift_id', 'break_start', 'break_finish', 'is_paid'], processor.breaks)
-        processor.insert_data('allowances', ['allowance_id', 'shift_id', 'allowance_value', 'allowance_cost'], processor.allowances)
-        processor.insert_data('award_interpretations', ['award_id', 'shift_id', 'award_date', 'award_units', 'award_cost'], processor.award_interpretations)
+    processor.process_all_pages()
