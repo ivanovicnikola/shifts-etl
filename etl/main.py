@@ -55,8 +55,15 @@ class ShiftDataProcessor:
         """Processes the JSON response and extracts relevant data."""
         results = json_data['results']
 
-        # Process shifts
-        self.shifts = [
+        # Process the different components of the data
+        self.shifts = self.process_shifts(results)
+        self.breaks = self.process_breaks(results)
+        self.allowances = self.process_allowances(results)
+        self.award_interpretations = self.process_award_interpretations(results)
+
+    def process_shifts(self, results: List[Dict]) -> List[Dict]:
+        """Processes shift data."""
+        return [
             {
                 'shift_id': result['id'],
                 'shift_date': result['date'],
@@ -65,48 +72,45 @@ class ShiftDataProcessor:
                     sum(award['cost'] for award in result['award_interpretations']),
                     4
                 ),
-                'shift_start': (
-                    datetime.fromtimestamp(result['start'] / 1000) if isinstance(result['start'], int) and result['start'] > 0
-                    else None
-                ),
-                'shift_finish': (
-                    datetime.fromtimestamp(result['finish'] / 1000) if isinstance(result['finish'], int) and result['finish'] > 0
-                    else None
-                )
+                'shift_start': self.parse_timestamp(result.get('start')),
+                'shift_finish': self.parse_timestamp(result.get('finish'))
             }
             for result in results
         ]
-        
-        # Process breaks
-        self.breaks = [
+
+    def process_breaks(self, results: List[Dict]) -> List[Dict]:
+        """Processes break data."""
+        return [
             {
                 'break_id': break_record['id'],
                 'shift_id': result['id'],
-                'break_start': (
-                    datetime.fromtimestamp(break_record['start'] / 1000) if isinstance(break_record['start'], int) and break_record['start'] > 0
-                    else None
-                ),
-                'break_finish': (
-                    datetime.fromtimestamp(break_record['finish'] / 1000) if isinstance(break_record['finish'], int) and break_record['finish'] > 0
-                    else None
-                ),
+                'break_start': self.parse_timestamp(break_record.get('start')),
+                'break_finish': self.parse_timestamp(break_record.get('finish')),
                 'is_paid': break_record['paid']
             }
             for result in results
             for break_record in result['breaks']
         ]
 
-        # Process allowances
-        self.allowances = self.map_dict_keys(
+    def process_allowances(self, results: List[Dict]) -> List[Dict]:
+        """Processes allowance data."""
+        return self.map_dict_keys(
             self.process_nested_records(results, 'allowances', 'shift_id'),
             {'id': 'allowance_id', 'value': 'allowance_value', 'cost': 'allowance_cost'}
         )
-        
-        # Process award interpretations
-        self.award_interpretations = self.map_dict_keys(
+
+    def process_award_interpretations(self, results: List[Dict]) -> List[Dict]:
+        """Processes award interpretation data."""
+        return self.map_dict_keys(
             self.process_nested_records(results, 'award_interpretations', 'shift_id'),
             {'id': 'award_id', 'date': 'award_date', 'units': 'award_units', 'cost': 'award_cost'}
         )
+
+    def parse_timestamp(self, timestamp: Optional[int]) -> Optional[datetime]:
+        """Converts a timestamp to a datetime object, or returns None if invalid."""
+        if isinstance(timestamp, int) and timestamp > 0:
+            return datetime.fromtimestamp(timestamp / 1000)
+        return None
 
     def insert_data(self, table_name: str, columns: List[str], data: List[Dict]) -> None:
         """Inserts data into the database."""
