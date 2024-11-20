@@ -164,6 +164,83 @@ class ShiftDataProcessor:
             else:
                 print("Failed to fetch data, stopping.")
                 break  # Break the loop if there's an error fetching data
+        
+        # After inserting all data compute kpis
+        self.compute_kpis()
+
+    def compute_kpis(self) -> None:
+        """
+        Computes and inserts KPIs into the kpis table in a single query.
+        """
+        try:
+            conn = psycopg2.connect(**self.db_config)
+            cursor = conn.cursor()
+
+            insert_query = """
+            INSERT INTO kpis (kpi_name, kpi_date, kpi_value)
+            VALUES
+            (
+                'mean_break_length_in_minutes', 
+                CURRENT_DATE, 
+                (SELECT EXTRACT(EPOCH FROM AVG(break_finish - break_start)) / 60 FROM breaks)
+            ),
+            (
+                'mean_shift_cost',
+                CURRENT_DATE,
+                (SELECT AVG(shift_cost) FROM shifts)
+            ),
+            (
+                'max_allowance_cost_14d',
+                CURRENT_DATE,
+                (
+                    SELECT MAX(allowance_cost) 
+                    FROM allowances 
+                    INNER JOIN shifts ON allowances.shift_id = shifts.shift_id 
+                    WHERE shift_date >= CURRENT_DATE - INTERVAL '14 days'
+                )
+            ),
+            (
+                'max_break_free_shift_period_in_days',
+                CURRENT_DATE,
+                (
+                    WITH grps AS (
+                        SELECT *,
+                            SUM(CASE WHEN break_id IS NULL THEN 1 ELSE 0 END) OVER(ORDER BY shift_date) AS grp
+                        FROM shifts
+                        LEFT JOIN breaks ON shifts.shift_id = breaks.shift_id
+                    )
+                    SELECT COUNT(*) - CASE WHEN grp = 0 THEN 0 ELSE 1 END AS cnt
+                    FROM grps
+                    GROUP BY grp
+                    ORDER BY cnt DESC 
+                    LIMIT 1
+                )
+            ),
+            (
+                'min_shift_length_in_hours',
+                CURRENT_DATE,
+                (SELECT MIN(EXTRACT(EPOCH FROM (shift_finish - shift_start)) / 3600) FROM shifts)
+            ),
+            (
+                'total_number_of_paid_breaks',
+                CURRENT_DATE,
+                (SELECT COUNT(*) FROM breaks WHERE is_paid = true)
+            );
+            """
+            
+            cursor.execute(insert_query)
+
+            conn.commit()
+
+            print("Successfully inserted KPI values into the kpis table")
+
+        except Exception as e:
+            print(f"Error computing and inserting KPIs: {e}")
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
 
 if __name__ == "__main__":
