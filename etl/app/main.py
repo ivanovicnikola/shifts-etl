@@ -34,3 +34,17 @@ async def run_etl():
         # General errors
         logging.error(f"ETL process failed: {e}")
         raise HTTPException(status_code=500, detail=f"ETL process failed: {e}")
+
+@app.post("/clear-data")
+async def clear_data():
+    """
+    Endpoint to clear data from the shifts and kpis tables.
+    """
+    try:
+        processor = ShiftDataProcessor(DB_CONFIG, API_URL)
+        processor.clear_data()
+        return {"status": "Data cleared successfully"}
+    except Exception as e:
+        # Log the error and return an HTTP 500 error
+        logging.error(f"Failed to clear data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear data: {e}")

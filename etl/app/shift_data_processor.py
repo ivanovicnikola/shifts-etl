@@ -271,3 +271,31 @@ class ShiftDataProcessor:
                 cursor.close()
             if conn:
                 conn.close()
+
+    def clear_data(self) -> None:
+        """
+        Deletes all data from tables
+        """
+        try:
+            conn = psycopg2.connect(**self.db_config)
+            cursor = conn.cursor()
+
+            delete_query = """
+            DELETE FROM shifts CASCADE;
+            DELETE FROM kpis;
+            """
+            
+            cursor.execute(delete_query)
+
+            conn.commit()
+
+            logging.info("Successfully cleared data from tables")
+
+        except Exception as e:
+            logging.error(f"Error clearing data: {e}")
+            raise
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
