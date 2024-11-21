@@ -120,8 +120,8 @@ class ShiftDataProcessor:
             return datetime.fromtimestamp(timestamp / 1000)
         return None
 
-    def insert_data(self, table_name: str, columns: List[str], data: List[Dict]) -> None:
-        """Inserts data into the database."""
+    def insert_data(self, conn, table_name: str, columns: List[str], data: List[Dict]) -> None:
+        """Inserts data into the database with transaction handling."""
         column_names = ', '.join(columns)
         insert_query = f"INSERT INTO {table_name} ({column_names}) VALUES %s"
 
@@ -129,22 +129,19 @@ class ShiftDataProcessor:
         data_tuples = [tuple(record[col] for col in columns) for record in data]
 
         try:
-            conn = psycopg2.connect(**self.db_config)
             cursor = conn.cursor()
 
             # Use execute_values to insert all data in one go
             execute_values(cursor, insert_query, data_tuples)
 
-            conn.commit()
             logging.info(f"Successfully inserted {len(data)} records into {table_name}")
 
         except Exception as e:
             logging.error(f"Error inserting data into {table_name}: {e}")
+            conn.rollback()
             raise
-
         finally:
             cursor.close()
-            conn.close()
     
     def get_next_url(self, json_data: Dict) -> Optional[str]:
         """Extracts the next page URL from the response data."""
@@ -155,15 +152,35 @@ class ShiftDataProcessor:
         return None
 
     def process_and_insert_data(self, json_data):
-        """Process the current page and insert data into the database."""
-        # Process data for this page
-        self.process_json(json_data)
+        """Process the current page and insert data into the database with transaction handling."""
+        try:
+            conn = psycopg2.connect(**self.db_config)
+            conn.autocommit = False  # Disable autocommit to manage transaction manually
 
-        # Insert data for each table
-        self.insert_data('shifts', ['shift_id', 'shift_date', 'shift_start', 'shift_finish', 'shift_cost'], self.shifts)
-        self.insert_data('breaks', ['break_id', 'shift_id', 'break_start', 'break_finish', 'is_paid'], self.breaks)
-        self.insert_data('allowances', ['allowance_id', 'shift_id', 'allowance_value', 'allowance_cost'], self.allowances)
-        self.insert_data('award_interpretations', ['award_id', 'shift_id', 'award_date', 'award_units', 'award_cost'], self.award_interpretations)
+            # Process data for this page
+            self.process_json(json_data)
+
+            # Insert data for each table within the same transaction
+            self.insert_data(conn, 'shifts', ['shift_id', 'shift_date', 'shift_start', 'shift_finish', 'shift_cost'], self.shifts)
+            self.insert_data(conn, 'breaks', ['break_id', 'shift_id', 'break_start', 'break_finish', 'is_paid'], self.breaks)
+            self.insert_data(conn, 'allowances', ['allowance_id', 'shift_id', 'allowance_value', 'allowance_cost'], self.allowances)
+            self.insert_data(conn, 'award_interpretations', ['award_id', 'shift_id', 'award_date', 'award_units', 'award_cost'], self.award_interpretations)
+
+            # If all inserts succeed, commit the transaction
+            conn.commit()
+
+            logging.info(f"Successfully processed and inserted data for page.")
+
+        except Exception as e:
+            logging.error(f"Error processing and inserting data: {e}")
+            # Ensure rollback on failure
+            if conn:
+                conn.rollback()
+            raise
+
+        finally:
+            if conn:
+                conn.close()
 
     def process_all_pages(self):
         """Fetches, processes, and inserts data for all pages."""

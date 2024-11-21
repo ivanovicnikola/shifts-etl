@@ -19,7 +19,7 @@ BASE_API_URL = os.getenv("API_URL", "http://localhost:8000/api/shifts")
 
 def add_query_params(url: str, params: dict) -> str:
     """
-    Safely add or update query parameters to a URL.
+    Add or update query parameters to a URL.
     """
     url_parts = urlparse(url)
     existing_params = parse_qs(url_parts.query)
