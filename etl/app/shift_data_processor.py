@@ -273,7 +273,7 @@ class ShiftDataProcessor:
                 (SELECT COUNT(*) FROM breaks WHERE is_paid = true)
             );
             """
-            
+
             cursor.execute(insert_query)
 
             conn.commit()
@@ -281,8 +281,12 @@ class ShiftDataProcessor:
             logging.info("Successfully inserted KPI values into the kpis table")
 
         except Exception as e:
+            # Log the error and roll back the transaction if something goes wrong
             logging.error(f"Error computing and inserting KPIs: {e}")
+            if conn:
+                conn.rollback()
             raise
+
         finally:
             if cursor:
                 cursor.close()
