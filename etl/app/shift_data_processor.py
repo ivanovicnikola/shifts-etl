@@ -181,7 +181,7 @@ class ShiftDataProcessor:
                         logging.info(f"Fetching next page: {url}")
                     else:
                         logging.info("No more pages to fetch.")
-                        break  # Exit loop if no 'next' URL is found
+                        break
                 else:
                     logging.error("Failed to fetch data, stopping.")
                     raise ValueError("Failed to fetch data for the page.")
@@ -233,8 +233,8 @@ class ShiftDataProcessor:
                 CURRENT_DATE,
                 (
                     WITH grps AS (
-                        SELECT *,
-                            SUM(CASE WHEN break_id IS NULL THEN 1 ELSE 0 END) OVER(ORDER BY shift_date) AS grp
+                        SELECT shifts.shift_id, break_id, shift_date,
+                            SUM(CASE WHEN break_id IS NULL THEN 0 ELSE 1 END) OVER(ORDER BY shift_date) AS grp
                         FROM shifts
                         LEFT JOIN breaks ON shifts.shift_id = breaks.shift_id
                     )
