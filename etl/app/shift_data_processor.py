@@ -5,8 +5,6 @@ import psycopg2
 from psycopg2.extras import execute_values
 from urllib.parse import urljoin, urlparse
 import logging
-import os
-
 
 # Configure logging to output to the console
 logging.basicConfig(

@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from shift_data_processor import ShiftDataProcessor
+from app.shift_data_processor import ShiftDataProcessor
 import os
 import logging
 
