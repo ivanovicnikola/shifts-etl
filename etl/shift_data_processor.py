@@ -3,14 +3,10 @@ import requests
 from typing import List, Dict, Optional
 import psycopg2
 from psycopg2.extras import execute_values
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import logging
+import os
 
-DB_HOST = 'localhost'
-DB_PORT = '5433'
-DB_NAME = 'postgres'
-DB_USER = 'postgres'
-DB_PASSWORD = 'postgres'
 
 # Configure logging to output to the console
 logging.basicConfig(
@@ -27,6 +23,13 @@ class ShiftDataProcessor:
         self.breaks = []
         self.allowances = []
         self.award_interpretations = []
+        self.base_url = self.get_base_url(api_url)
+
+    def get_base_url(self, url: str) -> str:
+        """Extracts the base URL by removing any query parameters."""
+        parsed_url = urlparse(url)
+        base_url = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
+        return base_url
 
     def fetch_data(self, url: str) -> Optional[Dict]:
         """Fetches data from the API."""
@@ -139,16 +142,18 @@ class ShiftDataProcessor:
 
         except Exception as e:
             logging.error(f"Error inserting data into {table_name}: {e}")
+            raise
+
         finally:
             cursor.close()
             conn.close()
     
-    def get_next_url(self, json_data):
+    def get_next_url(self, json_data: Dict) -> Optional[str]:
         """Extracts the next page URL from the response data."""
         next_url = json_data['links'].get('next', None)
-        base_url = json_data['links'].get('base', None)
-        if next_url and base_url:
-            return urljoin(base_url, next_url)
+        if next_url:
+            # Append next URL to the base URL
+            return urljoin(self.base_url, next_url)
         return None
 
     def process_and_insert_data(self, json_data):
@@ -181,14 +186,18 @@ class ShiftDataProcessor:
                         break  # Exit loop if no 'next' URL is found
                 else:
                     logging.error("Failed to fetch data, stopping.")
-                    break  # Stop if data fetch failed
+                    raise ValueError("Failed to fetch data for the page.")
 
             except Exception as e:
                 logging.error(f"Error processing data: {e}")
-                break  # Stop the loop on error
+                raise
 
         # After all pages are processed, compute KPIs
-        self.compute_kpis()
+        try:
+            self.compute_kpis()
+        except Exception as e:
+            logging.error(f"Error computing KPIs: {e}")
+            raise
 
     def compute_kpis(self) -> None:
         """
@@ -258,21 +267,9 @@ class ShiftDataProcessor:
 
         except Exception as e:
             logging.error(f"Error computing and inserting KPIs: {e}")
+            raise
         finally:
             if cursor:
                 cursor.close()
             if conn:
                 conn.close()
-
-
-if __name__ == "__main__":
-    db_config = {
-        'dbname': DB_NAME,
-        'user': DB_USER,
-        'password': DB_PASSWORD,
-        'host': DB_HOST,
-        'port': DB_PORT,
-    }
-    api_url = 'http://localhost:8000/api/shifts'
-    processor = ShiftDataProcessor(db_config, api_url)
-    processor.process_all_pages()

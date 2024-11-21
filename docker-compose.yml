@@ -5,6 +5,25 @@ services:
     restart: on-failure
     ports:
       - "8000:8000"
+    networks:
+      - shifts_api
+      - postgres
+  
+  etl_api:
+    build: etl/.
+    container_name: etl-api
+    restart: on-failure
+    ports:
+      - "8080:8080"
+    networks:
+      - postgres
+      - shifts_api
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      API_URL: http://shifts_api:8000/api/shifts
 
   postgres:
     image: postgres
@@ -37,6 +56,8 @@ services:
 
 networks:
   postgres:
+    driver: bridge
+  shifts_api:
     driver: bridge
 
 volumes:
