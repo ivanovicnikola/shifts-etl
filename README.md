@@ -107,19 +107,20 @@ The configuration for the database and API base URL are read from environmental 
 
 **Note**: PostgreSQL runs on port 5433 in this setup to avoid conflicts with any existing local PostgreSQL instances.
 
-## Tests
+## Tests  
 
-Three tests have been implemented to validate different aspects of the ETL process:
-1. **Basic Test**: Verifies fetching, processing, and inserting data for a single API response.
-2. **Pagination Test**: Simulates the loading of multiple pages of API data.
-3. **Rollback Test**: Assesses whether inserts within a batch are rolled back when an error occurs.
+Three tests have been implemented to validate different aspects of the ETL process:  
+1. **Basic Test**: Verifies fetching, processing, and inserting data for a single API response.  
+2. **Pagination Test**: Simulates the loading of multiple pages of API data.  
+3. **Rollback Test**: Assesses whether inserts within a batch are rolled back when an error occurs.  
 
-To run the tests, create a test database (configured as `test_db`) and run:
+To run the tests, ensure you are in the `etl` directory. Create a test database (configured as `test_db`) and execute the following command:  
 
-```bash
-python -m unittest tests/test_shift_data_processor.py
-```
+```bash  
+python -m unittest tests/test_shift_data_processor.py  
+```  
 
+Running the command from any other directory may result in errors due to incorrect relative paths.  
 
 ## Additional Considerations
 
