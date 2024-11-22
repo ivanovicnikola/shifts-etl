@@ -212,6 +212,67 @@ class TestShiftDataProcessor(unittest.TestCase):
 
         processor.clear_data()
 
+    def test_bulk_insert_failure(self):
+        # Sample data where the second shift has the same break_id as the first
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "results": [
+                {
+                    "id": "b2b9437a-28df-4ec4-8e4a-2bbdc241330b",
+                    "date": "2023-11-27",
+                    "start": 1701077400000,
+                    "finish": 1701108900000,
+                    "breaks": [
+                        {
+                            "id": "16419f82-8b9d-4434-a465-e150bd9c66b3",
+                            "start": 1701085620000,
+                            "finish": 1701087005277,
+                            "paid": False
+                        }
+                    ],
+                    "allowances": [],
+                    "award_interpretations": []
+                },
+                {
+                    "id": "d453dd32-4b0d-4b41-8d52-88f1142c3fe8",
+                    "date": "2023-11-28",
+                    "start": 1701160200000,
+                    "finish": 1701198000000,
+                    "breaks": [
+                        {
+                            "id": "16419f82-8b9d-4434-a465-e150bd9c66b3",  # Same break_id as the previous shift
+                            "start": 1701168180000,
+                            "finish": 1701169724388,
+                            "paid": True
+                        }
+                    ],
+                    "allowances": [],
+                    "award_interpretations": []
+                }
+            ]
+        }
+
+        processor = ShiftDataProcessor(db_config=self.db_config, api_url='http://localhost:8000/api/shifts')
+
+        # Simulate inserting the data, but raise an exception for the duplicate break_id
+        with self.assertRaises(psycopg2.IntegrityError):
+            processor.process_and_insert_data(json_data=mock_response.json())
+
+        try:
+            conn = psycopg2.connect(**self.db_config)
+            cursor = conn.cursor()
+            # Assert that the data was not inserted into the database
+            cursor.execute("SELECT * FROM shifts")
+            shifts = cursor.fetchall()
+            self.assertEqual(shifts, [])
+
+            cursor.execute("SELECT * FROM breaks")
+            breaks = cursor.fetchall()
+            self.assertEqual(breaks, [])
+        except Exception as e:
+            print(f"Error verifying inserted data: {e}")
+            raise
+
     def setup_test_database(self, db_config, sql_file_path):
         """Sets up the test database tables."""
         try:
