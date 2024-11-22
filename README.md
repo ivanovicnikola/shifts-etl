@@ -95,13 +95,13 @@ The ETL job has been integrated into a Docker Compose setup, so the entire syste
 docker-compose up --build
 ```
 
-The ETL application will be accessible at [http://localhost:8080](http://localhost:8080) and provides the following endpoints:
+The ETL application will be accessible at [http://localhost:8080](http://localhost:8080) and provides the following POST endpoints:
 
 1. **Run ETL**: Executes the entire ETL job, with an optional `batch_size` query parameter between 1 and 30:
-   - Example: [http://localhost:8080/run-etl?batch_size=30](http://localhost:8080/run-etl?batch_size=30)
+   - Example: [POST] [http://localhost:8080/run-etl?batch_size=30](http://localhost:8080/run-etl?batch_size=30)
    
 2. **Clear Data**: Clears all inserted data from the database:
-   - [http://localhost:8080/clear-data](http://localhost:8080/clear-data)
+   - [POST] [http://localhost:8080/clear-data](http://localhost:8080/clear-data)
 
 The configuration for the database and API base URL are read from environmental variables in the `docker-compose.yaml` file.
 
