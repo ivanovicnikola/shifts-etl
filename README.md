@@ -1,118 +1,128 @@
 # Shifts ETL
 
-Work shifts for the past year are exposed through paginated REST API. Your
-task is to consume data from endpoint, perform specified transformations and
-store results into specified database (i.e. create an ETL job).
-
-All ETL job related code should be inside [etl](./etl) dir. Make sure to
-write clear instructions how to setup and run ETL job.
+This project implements an **ETL (Extract, Transform, Load)** job designed to consume shift data from an API endpoint, perform the required transformations, and store the results in a PostgreSQL database.
 
 <p align="center">
-    <img src="./diagram.png">
+    <img src="./diagram.png" alt="ETL Diagram">
 </p>
 
-## Getting Started
+## Approach
 
-Besides chosen language and tools for ETL job, you will need `docker` and `docker-compose`.
+The ETL process was designed to scale beyond a small number of records (e.g., 360), and the following considerations were made:
 
-Initialize & start shifts API and target Postgres database in the background
-with
+- Keeping all records in memory, using a single database transaction for all inserts, or relying on an Object-Relational Mapper (ORM) were avoided.
+  
+### Key Steps in the ETL Process:
+1. **Extract**: Data is fetched by calling the provided API endpoint.
+2. **Transform**: The returned JSON data is processed to generate separate lists of dictionaries for shifts, breaks, allowances, and award interpretations.
+3. **Data Augmentation**: Nested records (e.g., breaks, allowances) are assigned an additional column representing the `shift_id` of the parent shift.
+4. **Timestamp Conversion**: Timestamps in milliseconds are converted to seconds and parsed as timestamps.
+5. **Shift Cost Calculation**: The shift cost is computed during transformation.
+6. **Data Mapping**: A function maps the dictionary keys to database column names to ensure better fault tolerance.
+7. **Bulk Insert**: For each list (shifts, breaks, allowances, etc.), a bulk insert is performed by transforming the data into a list of arranged tuples.
+8. **Transaction Management**: Inserts are done within a database transaction. If an insert fails, all data in the batch is rolled back to maintain data integrity.
+9. **Pagination Handling**: If the API response provides a `next` URL, the ETL job fetches the next batch of data and repeats steps 1-8 until no further data is available.
+10. **KPI Calculation**: Once all data is inserted, Key Performance Indicators (KPIs) are computed using an SQL query to avoid excessive memory usage.
 
-```bash
-$ docker-compose up -d
+### SQL query for KPIs:
+```sql
+INSERT INTO kpis (kpi_name, kpi_date, kpi_value)
+            VALUES
+                (
+                    'mean_break_length_in_minutes', 
+                    CURRENT_DATE, 
+                    (SELECT COALESCE(EXTRACT(EPOCH FROM AVG(break_finish - break_start)) / 60, 0) FROM breaks)
+                ),
+                (
+                    'mean_shift_cost',
+                    CURRENT_DATE,
+                    (SELECT COALESCE(AVG(shift_cost), 0) FROM shifts)
+                ),
+                (
+                    'max_allowance_cost_14d',
+                    CURRENT_DATE,
+                    (
+                        SELECT COALESCE(MAX(allowance_cost), 0) 
+                        FROM allowances 
+                        INNER JOIN shifts ON allowances.shift_id = shifts.shift_id 
+                        WHERE shift_date >= CURRENT_DATE - INTERVAL '14 days'
+                    )
+                ),
+                (
+                    'max_break_free_shift_period_in_days',
+                    CURRENT_DATE,
+                    (
+                        WITH grps AS (
+                            SELECT shifts.shift_id, break_id, shift_date,
+                                SUM(CASE WHEN break_id IS NULL THEN 0 ELSE 1 END) OVER(ORDER BY shift_date) AS grp
+                            FROM shifts
+                            LEFT JOIN breaks ON shifts.shift_id = breaks.shift_id
+                        )
+                        SELECT COALESCE(
+                            COUNT(*) - CASE WHEN grp = 0 THEN 0 ELSE 1 END, 
+                            0
+                        ) AS cnt
+                        FROM grps
+                        GROUP BY grp
+                        ORDER BY cnt DESC 
+                        LIMIT 1
+                    )
+                ),
+                (
+                    'min_shift_length_in_hours',
+                    CURRENT_DATE,
+                    (SELECT COALESCE(MIN(EXTRACT(EPOCH FROM (shift_finish - shift_start)) / 3600), 0) FROM shifts)
+                ),
+                (
+                    'total_number_of_paid_breaks',
+                    CURRENT_DATE,
+                    (SELECT COALESCE(COUNT(*), 0) FROM breaks WHERE is_paid = true)
+                );
 ```
 
-### Shift API
+### Explanation of KPI Calculation:
+1. **Basic Aggregations**: Most KPIs are derived using simple SQL aggregate queries.
+2. **'max_break_free_shift_period_in_days'**: This KPI is calculated using a more complex SQL query:
+    - A **LEFT JOIN** is performed between shifts and breaks, resulting in `NULL` values for missing breaks.
+    - A **window function** is used to group shifts by consecutive periods without breaks.
+    - The largest group represents the longest break-free shift period, but it must be adjusted by removing 1, as every group starts with a single break record (except group 0 if it exists).
 
-Shift API spec is available at [Shift API Spec](http://localhost:8000/redoc).
-Endpoints return randomly generated (with fixed seed for reproducibility)
-shifts data for the previous year. There is not authentication mechanism.
+## How to Run
 
-### Postgres
+The ETL job has been integrated into a Docker Compose setup, so the entire system can be launched with:
 
-Transformed shifts data should be saved to the Postgres instance running at
-`localhost:5432` inside default `postgres` database. Default username and
-password are `postgres:postgres`. The database is already initialized with
-output tables:
+```bash
+docker-compose up --build
+```
 
-- `shifts`
-- `breaks`
-- `allowances`
-- `award_interpretations`
-- `kpis`
+The ETL application will be accessible at [http://localhost:8080](http://localhost:8080) and provides the following endpoints:
 
-Check out [db initialization script](./initdb.sql) for more details.
+1. **Run ETL**: Executes the entire ETL job, with an optional `batch_size` query parameter between 1 and 30:
+   - Example: [http://localhost:8080/run-etl?batch_size=30](http://localhost:8080/run-etl?batch_size=30)
+   
+2. **Clear Data**: Clears all inserted data from the database:
+   - [http://localhost:8080/clear-data](http://localhost:8080/clear-data)
 
-### pgAdmin
+The configuration for the database and API base URL are read from environmental variables in the `docker-compose.yaml` file.
 
-An instance of pgAdmin is running at
-[http://localhost:5050](http://localhost:5050) configured with following
-login information:
+**Note**: PostgreSQL runs on port 5433 in this setup to avoid conflicts with any existing local PostgreSQL instances.
 
-- username: `pgadmin@smartcat.io`
-- password: `pgadmin`
+## Tests
 
-After you log in, add a new database server. Postgres server is available
-under `postgres` hostname because `pgAdmin` and `postgres` servers are inside
-same docker network.
+Three tests have been implemented to validate different aspects of the ETL process:
+1. **Basic Test**: Verifies fetching, processing, and inserting data for a single API response.
+2. **Pagination Test**: Simulates the loading of multiple pages of API data.
+3. **Rollback Test**: Assesses whether inserts within a batch are rolled back when an error occurs.
 
-## Tasks
+To run the tests, create a test database (configured as `test_db`) and run:
 
-ETL job should perform transformations specified bellow. Consider scenarios
-when job might fail. Note that all timestamps are in UTC time zone.
+```bash
+python -m unittest tests/test_shift_data_processor.py
+```
 
-### 1. Extract Models
 
-Raw shift data contain nested models: breaks, allowances and award
-interpretations. Extract these records and insert them into corresponding
-Postgres tables: `shifts`, `breaks`, `allowances`, and `award_interpretations`.
+## Additional Considerations
 
-Additional requirements:
+This project was designed for a straightforward use case that involves ingesting all data from the provided API into the configured database. As a result, handling scenarios such as inserting records that may already exist (e.g., in repeated runs) is currently not implemented. To extend the project for more complex use cases, modifications would be necessary.
 
-- All IDs should be preserved (generated UUIDs)
-- All records returned from the shifts API must be saved into database
-- Calculate total shift cost (`shift.cost` field) that is equal to the sum of
-  all costs inside one shift (allowance costs + award interpretation costs)
-
-### 2. Calculate Shift KPIs
-
-Use extracted shifts data to calculate defined KPIs. KPIs are uniquely
-identified by KPI name and date when KPIs are calculated.
-
-| Name                                  | Description                                                            |
-| ------------------------------------- | ---------------------------------------------------------------------- |
-| `mean_break_length_in_minutes`        | Mean shift break time in minutes (`breaks.start` and `breaks.finish`). |
-| `mean_shift_cost`                     | Mean shift cost (`shifts.cost`).                                       |
-| `max_allowance_cost_14d`              | Max allowance cost in the last 14 days (`allowances.cost`).            |
-| `max_break_free_shift_period_in_days` | Longest period in days when consecutive shifts did not have breaks.    |
-| `min_shift_length_in_hours`           | Shortest shift duration (`shift.start` and `shift.finish`).            |
-| `total_number_of_paid_breaks`         | Total number of paid shift breaks (`breaks.is_paid`).                  |
-
-## Deliverables
-
-- Working or even non-working code sent in zip archive or shared via git repository
-- Code should be written in Python, Java or Scala
-- Code should contain README file that explains the approach and how to run the applications
-- Deployment and cleanup should be as simple as possible
-
-## General Advice
-
-- Use common sense
-- Keep things simple
-- It’s much better to have a working solution than the perfect, but not working solution
-
-## Evaluation Criteria
-
-The top is the most important:
-
-- Finished working sample (usable ETL job with clear instructions how to run and use)
-- Code quality (idiomatic Python, Java or Scala)
-- Design quality (proper abstractions)
-- Tests
-- Performance
-- Documented code (when it’s relevant)
-
-Remember that simple is better than complex, and complex is better than
-complicated.
-
-Good luck & have fun!
+For handling very large datasets, an alternative approach could involve appending records to separate CSV files. These files could then be imported into the database using the `COPY` command, which is significantly faster than `INSERT` statements, as it reduces the overhead associated with logging and parsing. However, this approach was avoided in this project to keep things simple, as it introduces unnecessary complexity for the current requirements.
