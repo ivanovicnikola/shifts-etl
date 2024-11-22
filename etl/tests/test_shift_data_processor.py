@@ -281,7 +281,6 @@ class TestShiftDataProcessor(unittest.TestCase):
 
         processor = ShiftDataProcessor(db_config=self.db_config, api_url='http://localhost:8000/api/shifts')
 
-        # Simulate inserting the data, but raise an exception for the duplicate break_id
         with self.assertRaises(psycopg2.IntegrityError):
             processor.process_and_insert_data(json_data=mock_response.json())
 
