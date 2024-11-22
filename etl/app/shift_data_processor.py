@@ -117,7 +117,7 @@ class ShiftDataProcessor:
     def parse_timestamp(self, timestamp: Optional[int]) -> Optional[datetime]:
         """Converts a timestamp to a datetime object, or returns None if invalid."""
         if isinstance(timestamp, int) and timestamp > 0:
-            return datetime.fromtimestamp(timestamp / 1000)
+            return datetime.fromtimestamp(timestamp // 1000)
         return None
 
     def insert_data(self, conn, table_name: str, columns: List[str], data: List[Dict]) -> None:
@@ -225,53 +225,57 @@ class ShiftDataProcessor:
             insert_query = """
             INSERT INTO kpis (kpi_name, kpi_date, kpi_value)
             VALUES
-            (
-                'mean_break_length_in_minutes', 
-                CURRENT_DATE, 
-                (SELECT EXTRACT(EPOCH FROM AVG(break_finish - break_start)) / 60 FROM breaks)
-            ),
-            (
-                'mean_shift_cost',
-                CURRENT_DATE,
-                (SELECT AVG(shift_cost) FROM shifts)
-            ),
-            (
-                'max_allowance_cost_14d',
-                CURRENT_DATE,
                 (
-                    SELECT MAX(allowance_cost) 
-                    FROM allowances 
-                    INNER JOIN shifts ON allowances.shift_id = shifts.shift_id 
-                    WHERE shift_date >= CURRENT_DATE - INTERVAL '14 days'
-                )
-            ),
-            (
-                'max_break_free_shift_period_in_days',
-                CURRENT_DATE,
+                    'mean_break_length_in_minutes', 
+                    CURRENT_DATE, 
+                    (SELECT COALESCE(EXTRACT(EPOCH FROM AVG(break_finish - break_start)) / 60, 0) FROM breaks)
+                ),
                 (
-                    WITH grps AS (
-                        SELECT shifts.shift_id, break_id, shift_date,
-                            SUM(CASE WHEN break_id IS NULL THEN 0 ELSE 1 END) OVER(ORDER BY shift_date) AS grp
-                        FROM shifts
-                        LEFT JOIN breaks ON shifts.shift_id = breaks.shift_id
+                    'mean_shift_cost',
+                    CURRENT_DATE,
+                    (SELECT COALESCE(AVG(shift_cost), 0) FROM shifts)
+                ),
+                (
+                    'max_allowance_cost_14d',
+                    CURRENT_DATE,
+                    (
+                        SELECT COALESCE(MAX(allowance_cost), 0) 
+                        FROM allowances 
+                        INNER JOIN shifts ON allowances.shift_id = shifts.shift_id 
+                        WHERE shift_date >= CURRENT_DATE - INTERVAL '14 days'
                     )
-                    SELECT COUNT(*) - CASE WHEN grp = 0 THEN 0 ELSE 1 END AS cnt
-                    FROM grps
-                    GROUP BY grp
-                    ORDER BY cnt DESC 
-                    LIMIT 1
-                )
-            ),
-            (
-                'min_shift_length_in_hours',
-                CURRENT_DATE,
-                (SELECT MIN(EXTRACT(EPOCH FROM (shift_finish - shift_start)) / 3600) FROM shifts)
-            ),
-            (
-                'total_number_of_paid_breaks',
-                CURRENT_DATE,
-                (SELECT COUNT(*) FROM breaks WHERE is_paid = true)
-            );
+                ),
+                (
+                    'max_break_free_shift_period_in_days',
+                    CURRENT_DATE,
+                    (
+                        WITH grps AS (
+                            SELECT shifts.shift_id, break_id, shift_date,
+                                SUM(CASE WHEN break_id IS NULL THEN 0 ELSE 1 END) OVER(ORDER BY shift_date) AS grp
+                            FROM shifts
+                            LEFT JOIN breaks ON shifts.shift_id = breaks.shift_id
+                        )
+                        SELECT COALESCE(
+                            COUNT(*) - CASE WHEN grp = 0 THEN 0 ELSE 1 END, 
+                            0
+                        ) AS cnt
+                        FROM grps
+                        GROUP BY grp
+                        ORDER BY cnt DESC 
+                        LIMIT 1
+                    )
+                ),
+                (
+                    'min_shift_length_in_hours',
+                    CURRENT_DATE,
+                    (SELECT COALESCE(MIN(EXTRACT(EPOCH FROM (shift_finish - shift_start)) / 3600), 0) FROM shifts)
+                ),
+                (
+                    'total_number_of_paid_breaks',
+                    CURRENT_DATE,
+                    (SELECT COALESCE(COUNT(*), 0) FROM breaks WHERE is_paid = true)
+                );
+
             """
 
             cursor.execute(insert_query)
