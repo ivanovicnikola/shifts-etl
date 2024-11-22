@@ -1,7 +1,15 @@
+import logging
 import unittest
 from unittest.mock import Mock, patch, MagicMock
 import psycopg2
 from app.shift_data_processor import ShiftDataProcessor
+
+# Configure logging to output to the console
+logging.basicConfig(
+    level=logging.DEBUG,  # Set the level to DEBUG to capture all log messages
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # Define log format
+    handlers=[logging.StreamHandler()]  # This will output logs to the console
+)
 
 class TestShiftDataProcessor(unittest.TestCase):
 
@@ -17,6 +25,25 @@ class TestShiftDataProcessor(unittest.TestCase):
 
         # Setup the test database
         self.setup_test_database(self.db_config, '../initdb.sql')
+    
+    def tearDown(self):
+        # Clear all tables in the database
+        self.clear_all_tables(self.db_config)
+
+    def clear_all_tables(self, db_config):
+        """Clears all tables in the test database."""
+        try:
+            conn = psycopg2.connect(**db_config)
+            cursor = conn.cursor()
+
+            cursor.execute("DELETE FROM shifts CASCADE;")
+            cursor.execute("DELETE FROM kpis CASCADE;")
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error while clearing tables: {e}")
 
     @patch('requests.get')  # Mocking the requests.get function
     def test_process_and_insert_data(self, mock_get):
@@ -95,7 +122,7 @@ class TestShiftDataProcessor(unittest.TestCase):
 
         self.verify_inserted_data(self.db_config)
 
-        processor.clear_data()
+        self.clear_all_tables(self.db_config)
 
     @patch('requests.get')  # Mock the requests.get method
     def test_process_all_pages(self, mock_get):
@@ -210,7 +237,7 @@ class TestShiftDataProcessor(unittest.TestCase):
         self.verify_inserted_data(self.db_config)
         self.verify_computed_kpis(self.db_config)
 
-        processor.clear_data()
+        self.clear_all_tables(self.db_config)
 
     def test_bulk_insert_failure(self):
         # Sample data where the second shift has the same break_id as the first
@@ -270,7 +297,7 @@ class TestShiftDataProcessor(unittest.TestCase):
             breaks = cursor.fetchall()
             self.assertEqual(breaks, [])
         except Exception as e:
-            print(f"Error verifying inserted data: {e}")
+            logging.error(f"Error verifying inserted data: {e}")
             raise
 
     def setup_test_database(self, db_config, sql_file_path):
@@ -288,7 +315,7 @@ class TestShiftDataProcessor(unittest.TestCase):
             cursor.close()
             conn.close()
         except Exception as e:
-            print(f"Error setting up database: {e}")
+            logging.error(f"Error setting up database: {e}")
             raise
 
     def verify_inserted_data(self, db_config):
@@ -320,7 +347,7 @@ class TestShiftDataProcessor(unittest.TestCase):
             cursor.close()
             conn.close()
         except Exception as e:
-            print(f"Error verifying inserted data: {e}")
+            logging.error(f"Error verifying inserted data: {e}")
             raise
 
     def verify_computed_kpis(self, db_config):
@@ -362,7 +389,7 @@ class TestShiftDataProcessor(unittest.TestCase):
             cursor.close()
             conn.close()
         except Exception as e:
-            print(f"Error verifying computed KPIs: {e}")
+            logging.error(f"Error verifying computed KPIs: {e}")
             raise
 
 if __name__ == '__main__':
